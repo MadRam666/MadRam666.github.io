@@ -111,8 +111,9 @@
         meta = { type: "meta", magic: "LightTransferQR", name: file.name, mime: file.type, total: chunks.length, size: base64.length };
         qrData = [meta, ...chunks.map((chunk, i) => ({ type: "data", i, data: chunk }))];
         currentIndex = 0;
-        isPaused = false;
-        resumeTransfer();
+        isPaused = true;
+        showQR(0); // Nur den ersten Block anzeigen
+        document.getElementById('sendInfo').textContent = `Initialer Block angezeigt – jetzt ▶️ Fortsetzen drücken.`;
       };
       reader.readAsArrayBuffer(file);
     }
