@@ -82,11 +82,7 @@
     <h2>Empfänger</h2>
     <label>Puffergröße: <span id="bufferSizeLabel">10</span></label><br>
     <input type="range" id="bufferSizeRange" min="1" max="50" step="1" value="10" oninput="document.getElementById('bufferSizeLabel').textContent = this.value">
-    <br><br>
-    <label>Kamera wählen:</label>
-    <select id="cameraSelect"></select>
-    <br>
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay></video>
     <div id="recvInfo">Warte auf Startblock...</div>
     <div id="recvProgress"></div>
   </section>
@@ -116,7 +112,7 @@
         qrData = [meta, ...chunks.map((chunk, i) => ({ type: "data", i, data: chunk }))];
         currentIndex = 0;
         isPaused = true;
-        showQR(0);
+        showQR(0); // Nur den ersten Block anzeigen
         document.getElementById('sendInfo').textContent = `Initialer Block angezeigt – jetzt ▶️ Fortsetzen drücken.`;
       };
       reader.readAsArrayBuffer(file);
@@ -169,32 +165,13 @@
       for (const key in receivedChunks) delete receivedChunks[key];
     }
 
-    function startCamera(deviceId) {
-      codeReader.reset();
-      codeReader.decodeFromVideoDevice(deviceId, 'video', (result, err) => {
-        if (result) {
-          const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
-          if (decodeQueue.length < maxSize) {
-            decodeQueue.push(result.getText());
-          }
+    codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
+      if (result) {
+        const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
+        if (decodeQueue.length < maxSize) {
+          decodeQueue.push(result.getText());
         }
-      });
-    }
-
-    ZXing.BrowserCodeReader.listVideoInputDevices().then(videoInputDevices => {
-      const select = document.getElementById('cameraSelect');
-      videoInputDevices.forEach(device => {
-        const option = document.createElement('option');
-        option.value = device.deviceId;
-        option.text = device.label || `Kamera ${select.length + 1}`;
-        select.appendChild(option);
-      });
-      if (videoInputDevices.length > 0) {
-        startCamera(videoInputDevices[0].deviceId);
       }
-      select.addEventListener('change', () => {
-        startCamera(select.value);
-      });
     });
 
     setInterval(() => {
