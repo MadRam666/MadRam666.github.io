@@ -80,13 +80,14 @@
 
   <section>
     <h2>Empfänger</h2>
+    <label>Puffergröße: <span id="bufferSizeLabel">10</span></label><br>
+    <input type="range" id="bufferSizeRange" min="1" max="50" step="1" value="10" oninput="document.getElementById('bufferSizeLabel').textContent = this.value">
     <video id="video" autoplay></video>
     <div id="recvInfo">Warte auf Startblock...</div>
     <div id="recvProgress"></div>
   </section>
 
   <script>
-    // ---------- SENDER ----------
     let chunks = [], currentIndex = 0, intervalId = null, isPaused = true, meta = {}, qrData = [];
 
     function splitData(str, size) {
@@ -99,18 +100,19 @@
 
     function startTransfer() {
       const file = document.getElementById('fileInput').files[0];
-      if (!file) return alert("Bitte Datei wählen");
+      if (!file) return alert("Bitte Datei auswählen.");
+
       const chunkSize = parseInt(document.getElementById('chunkSizeRange').value);
       const reader = new FileReader();
+
       reader.onload = () => {
         const base64 = btoa(new Uint8Array(reader.result).reduce((d, b) => d + String.fromCharCode(b), ''));
         chunks = splitData(base64, chunkSize);
         meta = { type: "meta", magic: "LightTransferQR", name: file.name, mime: file.type, total: chunks.length, size: base64.length };
         qrData = [meta, ...chunks.map((chunk, i) => ({ type: "data", i, data: chunk }))];
         currentIndex = 0;
-        isPaused = true;
-        showQR(0);
-        document.getElementById('sendInfo').textContent = `Blöcke: ${chunks.length} (Chunkgröße: ${chunkSize} Zeichen)`;
+        isPaused = false;
+        resumeTransfer();
       };
       reader.readAsArrayBuffer(file);
     }
@@ -145,7 +147,6 @@
       clearInterval(intervalId);
     }
 
-    // ---------- EMPFÄNGER ----------
     const codeReader = new ZXing.BrowserQRCodeReader();
     const receivedChunks = {};
     const decodeQueue = [];
@@ -165,7 +166,10 @@
 
     codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
       if (result) {
-        decodeQueue.push(result.getText());
+        const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
+        if (decodeQueue.length < maxSize) {
+          decodeQueue.push(result.getText());
+        }
       }
     });
 
