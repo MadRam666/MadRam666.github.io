@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>LightTransfer - Dateiübertragung via QR</title>
   <style>
     body {
@@ -80,14 +80,15 @@
 
   <section>
     <h2>Empfänger</h2>
-    <label>Puffergröße: <span id="bufferSizeLabel">10</span></label><br>
-    <input type="range" id="bufferSizeRange" min="1" max="50" step="1" value="10" oninput="document.getElementById('bufferSizeLabel').textContent = this.value">
+    <label>Scan-Frequenz: <span id="bufferSizeLabel">10</span> Frames/Sek.</label><br>
+    <input type="range" id="bufferSizeRange" min="1" max="50" step="1" value="10" oninput="updateBufferSizeLabel()">
     <video id="video" autoplay></video>
     <div id="recvInfo">Warte auf Startblock...</div>
     <div id="recvProgress"></div>
   </section>
 
   <script>
+    // Senderlogik
     let chunks = [], currentIndex = 0, intervalId = null, isPaused = true, meta = {}, qrData = [];
 
     function splitData(str, size) {
@@ -112,7 +113,7 @@
         qrData = [meta, ...chunks.map((chunk, i) => ({ type: "data", i, data: chunk }))];
         currentIndex = 0;
         isPaused = true;
-        showQR(0); // Nur den ersten Block anzeigen
+        showQR(0);
         document.getElementById('sendInfo').textContent = `Initialer Block angezeigt – jetzt ▶️ Fortsetzen drücken.`;
       };
       reader.readAsArrayBuffer(file);
@@ -148,10 +149,16 @@
       clearInterval(intervalId);
     }
 
+    // Empfängerlogik
     const codeReader = new ZXing.BrowserQRCodeReader();
     const receivedChunks = {};
     const decodeQueue = [];
     let expectedChunks = null, filename = "", filetype = "", base64Size = 0, started = false;
+
+    function updateBufferSizeLabel() {
+      const val = document.getElementById('bufferSizeRange').value;
+      document.getElementById('bufferSizeLabel').textContent = val;
+    }
 
     function resetReceiverUI() {
       document.getElementById('recvInfo').textContent = 'Warte auf Startblock...';
@@ -165,6 +172,7 @@
       for (const key in receivedChunks) delete receivedChunks[key];
     }
 
+    // Kameraerkennung über ZXing
     codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
       if (result) {
         const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
@@ -174,6 +182,7 @@
       }
     });
 
+    // QR-Dekodierung
     setInterval(() => {
       if (decodeQueue.length === 0) return;
       const text = decodeQueue.shift();
@@ -193,8 +202,6 @@
           document.getElementById('recvInfo').textContent = `Empfange Block ${obj.i + 1} / ${expectedChunks}`;
           updateProgress();
           if (Object.keys(receivedChunks).length === expectedChunks) finishReception();
-        } else if (!started) {
-          document.getElementById('recvInfo').textContent = "Empfange Datenblock ohne Startblock – warte auf Header.";
         }
       } catch (e) {
         document.getElementById('recvInfo').textContent = "Ungültiger QR-Code erkannt.";
@@ -225,6 +232,8 @@
       URL.revokeObjectURL(url);
       document.getElementById('recvInfo').textContent = "Empfang abgeschlossen! Datei heruntergeladen.";
     }
+
+    updateBufferSizeLabel();
   </script>
 </body>
 </html>
