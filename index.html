@@ -2,6 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LightTransfer - Dateiübertragung via QR</title>
   <style>
     body {
@@ -85,6 +86,7 @@
   </section>
 
   <script>
+    // ---------- SENDER ----------
     let chunks = [], currentIndex = 0, intervalId = null, isPaused = true, meta = {}, qrData = [];
 
     function splitData(str, size) {
@@ -143,9 +145,10 @@
       clearInterval(intervalId);
     }
 
-    // Empfänger
+    // ---------- EMPFÄNGER ----------
     const codeReader = new ZXing.BrowserQRCodeReader();
     const receivedChunks = {};
+    const decodeQueue = [];
     let expectedChunks = null, filename = "", filetype = "", base64Size = 0, started = false;
 
     function resetReceiverUI() {
@@ -156,37 +159,43 @@
       filetype = "";
       base64Size = 0;
       started = false;
+      decodeQueue.length = 0;
       for (const key in receivedChunks) delete receivedChunks[key];
     }
 
     codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
       if (result) {
-        console.log('QR erkannt:', result.getText());
-        try {
-          const obj = JSON.parse(result.getText());
-          if (obj.type === "meta" && obj.magic === "LightTransferQR") {
-            resetReceiverUI();
-            filename = obj.name;
-            filetype = obj.mime;
-            expectedChunks = obj.total;
-            base64Size = obj.size;
-            started = true;
-            document.getElementById('recvInfo').textContent = `Startblock empfangen: ${filename} (${expectedChunks} Blöcke)`;
-            updateProgress();
-          } else if (obj.type === "data" && started && expectedChunks !== null) {
-            if (!(obj.i in receivedChunks)) receivedChunks[obj.i] = obj.data;
-            document.getElementById('recvInfo').textContent = `Empfange Block ${obj.i + 1} / ${expectedChunks}`;
-            updateProgress();
-            if (Object.keys(receivedChunks).length === expectedChunks) finishReception();
-          } else if (!started) {
-            document.getElementById('recvInfo').textContent = "Empfange Datenblock ohne Startblock – warte auf Header.";
-          }
-        } catch (e) {
-          document.getElementById('recvInfo').textContent = "Ungültiger QR-Code erkannt.";
-          console.error("Fehler beim QR-Code-Inhalt", e);
-        }
+        decodeQueue.push(result.getText());
       }
     });
+
+    setInterval(() => {
+      if (decodeQueue.length === 0) return;
+      const text = decodeQueue.shift();
+      try {
+        const obj = JSON.parse(text);
+        if (obj.type === "meta" && obj.magic === "LightTransferQR") {
+          resetReceiverUI();
+          filename = obj.name;
+          filetype = obj.mime;
+          expectedChunks = obj.total;
+          base64Size = obj.size;
+          started = true;
+          document.getElementById('recvInfo').textContent = `Startblock empfangen: ${filename} (${expectedChunks} Blöcke)`;
+          updateProgress();
+        } else if (obj.type === "data" && started && expectedChunks !== null) {
+          if (!(obj.i in receivedChunks)) receivedChunks[obj.i] = obj.data;
+          document.getElementById('recvInfo').textContent = `Empfange Block ${obj.i + 1} / ${expectedChunks}`;
+          updateProgress();
+          if (Object.keys(receivedChunks).length === expectedChunks) finishReception();
+        } else if (!started) {
+          document.getElementById('recvInfo').textContent = "Empfange Datenblock ohne Startblock – warte auf Header.";
+        }
+      } catch (e) {
+        document.getElementById('recvInfo').textContent = "Ungültiger QR-Code erkannt.";
+        console.error("Fehler beim QR-Code-Inhalt", e);
+      }
+    }, 200);
 
     function updateProgress() {
       const div = document.getElementById('recvProgress');
