@@ -268,6 +268,47 @@ function finishReception() {
 }
 
 updateBufferSizeLabel();
-  </script>
+
+// Ergänzung für Variante B: Fehlende Chunks erneut senden
+function getMissingChunks() {
+  const missing = [];
+  if (expectedChunks === null) return missing;
+  for (let i = 0; i < expectedChunks; i++) {
+    if (!(i in receivedChunks)) missing.push(i);
+  }
+  return missing;
+}
+
+function resendMissingChunks() {
+  const missing = getMissingChunks();
+  if (missing.length === 0) {
+    alert("Es fehlen keine Blöcke – alles wurde bereits empfangen.");
+    return;
+  }
+  alert(`Sende ${missing.length} fehlende Blöcke erneut.`);
+  let i = 0;
+  clearInterval(intervalId);
+  intervalId = setInterval(() => {
+    if (i >= missing.length) {
+      clearInterval(intervalId);
+      return;
+    }
+    const chunkIndex = missing[i];
+    showQR(chunkIndex + 1); // +1 wegen meta bei qrData[0]
+    i++;
+  }, 1000);
+}
+
+// Button hinzufügen im Sender-Abschnitt (HTML):
+// <button onclick="resendMissingChunks()">🔁 Fehlende Blöcke senden</button>
+
+document.addEventListener("DOMContentLoaded", () => {
+  const senderSection = document.querySelector("section");
+  const resendBtn = document.createElement("button");
+  resendBtn.textContent = "🔁 Fehlende Blöcke senden";
+  resendBtn.onclick = resendMissingChunks;
+  senderSection.appendChild(resendBtn);
+});
+</script>
 </body>
 </html>
