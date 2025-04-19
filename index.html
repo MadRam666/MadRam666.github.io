@@ -48,6 +48,7 @@
   </style>
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 </head>
 <body>
   <section>
@@ -88,152 +89,185 @@
   </section>
 
   <script>
-    // Senderlogik
-    let chunks = [], currentIndex = 0, intervalId = null, isPaused = true, meta = {}, qrData = [];
+    // Vollständiger Skriptcode
+let chunks = [], currentIndex = 0, intervalId = null, isPaused = true, meta = {}, qrData = [];
 
-    function splitData(str, size) {
-      const result = [];
-      for (let i = 0; i < str.length; i += size) {
-        result.push(str.slice(i, i + size));
+function splitData(str, size) {
+  const result = [];
+  for (let i = 0; i < str.length; i += size) {
+    result.push(str.slice(i, i + size));
+  }
+  return result;
+}
+
+async function hashData(data) {
+  const buffer = new TextEncoder().encode(data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function startTransfer() {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) return alert("Bitte Datei auswählen.");
+
+  const chunkSize = parseInt(document.getElementById('chunkSizeRange').value);
+  const reader = new FileReader();
+
+  reader.onload = async () => {
+    const compressed = pako.deflate(new Uint8Array(reader.result));
+    const base64 = btoa(String.fromCharCode(...compressed));
+    chunks = splitData(base64, chunkSize);
+
+    meta = {
+      type: "meta",
+      magic: "LightTransferQR",
+      name: file.name,
+      mime: file.type,
+      total: chunks.length,
+      size: base64.length
+    };
+
+    qrData = [meta];
+    for (let i = 0; i < chunks.length; i++) {
+      const data = chunks[i];
+      const hash = await hashData(data);
+      qrData.push({ type: "data", i, data, hash });
+    }
+
+    currentIndex = 0;
+    isPaused = true;
+    showQR(0);
+    document.getElementById('sendInfo').textContent = `Initialer Block angezeigt – jetzt ▶️ Fortsetzen drücken.`;
+  };
+
+  reader.readAsArrayBuffer(file);
+}
+
+async function showQR(index) {
+  const container = document.getElementById('qrcode');
+  container.innerHTML = "";
+  const size = parseInt(document.getElementById('qrSize').value);
+  const opts = {
+    width: size,
+    margin: 2,
+    color: { dark: "#000", light: "#FFF" }
+  };
+  const canvas = document.createElement('canvas');
+  await QRCode.toCanvas(canvas, JSON.stringify(qrData[index]), opts);
+  container.appendChild(canvas);
+}
+
+function resumeTransfer() {
+  if (intervalId) clearInterval(intervalId);
+  isPaused = false;
+  intervalId = setInterval(() => {
+    if (isPaused || currentIndex >= qrData.length) return;
+    showQR(currentIndex);
+    currentIndex++;
+    if (currentIndex >= qrData.length) clearInterval(intervalId);
+  }, 1000);
+}
+
+function pauseTransfer() {
+  isPaused = true;
+  clearInterval(intervalId);
+}
+
+const codeReader = new ZXing.BrowserQRCodeReader();
+const receivedChunks = {};
+const decodeQueue = [];
+let expectedChunks = null, filename = "", filetype = "", base64Size = 0, started = false;
+
+function updateBufferSizeLabel() {
+  const val = document.getElementById('bufferSizeRange').value;
+  document.getElementById('bufferSizeLabel').textContent = val;
+}
+
+function resetReceiverUI() {
+  document.getElementById('recvInfo').textContent = 'Warte auf Startblock...';
+  document.getElementById('recvProgress').innerHTML = '';
+  expectedChunks = null;
+  filename = "";
+  filetype = "";
+  base64Size = 0;
+  started = false;
+  decodeQueue.length = 0;
+  for (const key in receivedChunks) delete receivedChunks[key];
+}
+
+async function isValidChunk(data, expectedHash) {
+  const actualHash = await hashData(data);
+  return actualHash === expectedHash;
+}
+
+codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
+  if (result) {
+    const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
+    if (decodeQueue.length < maxSize) {
+      decodeQueue.push(result.getText());
+    }
+  }
+});
+
+setInterval(() => {
+  if (decodeQueue.length === 0) return;
+  const text = decodeQueue.shift();
+  try {
+    const obj = JSON.parse(text);
+    if (obj.type === "meta" && obj.magic === "LightTransferQR") {
+      resetReceiverUI();
+      filename = obj.name;
+      filetype = obj.mime;
+      expectedChunks = obj.total;
+      base64Size = obj.size;
+      started = true;
+      document.getElementById('recvInfo').textContent = `Startblock empfangen: ${filename} (${expectedChunks} Blöcke)`;
+      updateProgress();
+    } else if (obj.type === "data" && started && expectedChunks !== null) {
+      if (!(obj.i in receivedChunks)) {
+        isValidChunk(obj.data, obj.hash).then(valid => {
+          if (valid) {
+            receivedChunks[obj.i] = obj.data;
+            document.getElementById('recvInfo').textContent = `Empfange Block ${obj.i + 1} / ${expectedChunks}`;
+            updateProgress();
+            if (Object.keys(receivedChunks).length === expectedChunks) finishReception();
+          } else {
+            console.warn("Ungültiger Chunk", obj.i);
+          }
+        });
       }
-      return result;
     }
+  } catch (e) {
+    document.getElementById('recvInfo').textContent = "Ungültiger QR-Code erkannt.";
+  }
+}, 200);
 
-    function startTransfer() {
-      const file = document.getElementById('fileInput').files[0];
-      if (!file) return alert("Bitte Datei auswählen.");
+function updateProgress() {
+  const div = document.getElementById('recvProgress');
+  div.innerHTML = "";
+  if (expectedChunks === null) return;
+  for (let i = 0; i < expectedChunks; i++) {
+    const dot = document.createElement('span');
+    dot.textContent = i in receivedChunks ? "🟩" : "⬛";
+    div.appendChild(dot);
+  }
+}
 
-      const chunkSize = parseInt(document.getElementById('chunkSizeRange').value);
-      const reader = new FileReader();
+function finishReception() {
+  const data = Object.keys(receivedChunks).sort((a, b) => a - b).map(i => receivedChunks[i]).join('');
+  const binary = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+  const decompressed = pako.inflate(binary);
+  const blob = new Blob([decompressed], { type: filetype });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+  document.getElementById('recvInfo').textContent = "Empfang abgeschlossen! Datei heruntergeladen.";
+}
 
-      reader.onload = () => {
-        const base64 = btoa(new Uint8Array(reader.result).reduce((d, b) => d + String.fromCharCode(b), ''));
-        chunks = splitData(base64, chunkSize);
-        meta = { type: "meta", magic: "LightTransferQR", name: file.name, mime: file.type, total: chunks.length, size: base64.length };
-        qrData = [meta, ...chunks.map((chunk, i) => ({ type: "data", i, data: chunk }))];
-        currentIndex = 0;
-        isPaused = true;
-        showQR(0);
-        document.getElementById('sendInfo').textContent = `Initialer Block angezeigt – jetzt ▶️ Fortsetzen drücken.`;
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-    async function showQR(index) {
-      const container = document.getElementById('qrcode');
-      container.innerHTML = "";
-      const size = parseInt(document.getElementById('qrSize').value);
-      const opts = {
-        width: size,
-        margin: 2,
-        color: { dark: "#000", light: "#FFF" }
-      };
-      const canvas = document.createElement('canvas');
-      await QRCode.toCanvas(canvas, JSON.stringify(qrData[index]), opts);
-      container.appendChild(canvas);
-    }
-
-    function resumeTransfer() {
-      if (intervalId) clearInterval(intervalId);
-      isPaused = false;
-      intervalId = setInterval(() => {
-        if (isPaused || currentIndex >= qrData.length) return;
-        showQR(currentIndex);
-        currentIndex++;
-        if (currentIndex >= qrData.length) clearInterval(intervalId);
-      }, 1000);
-    }
-
-    function pauseTransfer() {
-      isPaused = true;
-      clearInterval(intervalId);
-    }
-
-    // Empfängerlogik
-    const codeReader = new ZXing.BrowserQRCodeReader();
-    const receivedChunks = {};
-    const decodeQueue = [];
-    let expectedChunks = null, filename = "", filetype = "", base64Size = 0, started = false;
-
-    function updateBufferSizeLabel() {
-      const val = document.getElementById('bufferSizeRange').value;
-      document.getElementById('bufferSizeLabel').textContent = val;
-    }
-
-    function resetReceiverUI() {
-      document.getElementById('recvInfo').textContent = 'Warte auf Startblock...';
-      document.getElementById('recvProgress').innerHTML = '';
-      expectedChunks = null;
-      filename = "";
-      filetype = "";
-      base64Size = 0;
-      started = false;
-      decodeQueue.length = 0;
-      for (const key in receivedChunks) delete receivedChunks[key];
-    }
-
-    // Kameraerkennung über ZXing
-    codeReader.decodeFromVideoDevice(undefined, 'video', (result, err) => {
-      if (result) {
-        const maxSize = parseInt(document.getElementById('bufferSizeRange').value);
-        if (decodeQueue.length < maxSize) {
-          decodeQueue.push(result.getText());
-        }
-      }
-    });
-
-    // QR-Dekodierung
-    setInterval(() => {
-      if (decodeQueue.length === 0) return;
-      const text = decodeQueue.shift();
-      try {
-        const obj = JSON.parse(text);
-        if (obj.type === "meta" && obj.magic === "LightTransferQR") {
-          resetReceiverUI();
-          filename = obj.name;
-          filetype = obj.mime;
-          expectedChunks = obj.total;
-          base64Size = obj.size;
-          started = true;
-          document.getElementById('recvInfo').textContent = `Startblock empfangen: ${filename} (${expectedChunks} Blöcke)`;
-          updateProgress();
-        } else if (obj.type === "data" && started && expectedChunks !== null) {
-          if (!(obj.i in receivedChunks)) receivedChunks[obj.i] = obj.data;
-          document.getElementById('recvInfo').textContent = `Empfange Block ${obj.i + 1} / ${expectedChunks}`;
-          updateProgress();
-          if (Object.keys(receivedChunks).length === expectedChunks) finishReception();
-        }
-      } catch (e) {
-        document.getElementById('recvInfo').textContent = "Ungültiger QR-Code erkannt.";
-        console.error("Fehler beim QR-Code-Inhalt", e);
-      }
-    }, 200);
-
-    function updateProgress() {
-      const div = document.getElementById('recvProgress');
-      div.innerHTML = "";
-      if (expectedChunks === null) return;
-      for (let i = 0; i < expectedChunks; i++) {
-        const dot = document.createElement('span');
-        dot.textContent = i in receivedChunks ? "🟩" : "⬛";
-        div.appendChild(dot);
-      }
-    }
-
-    function finishReception() {
-      const data = Object.keys(receivedChunks).sort((a, b) => a - b).map(i => receivedChunks[i]).join('');
-      const binary = Uint8Array.from(atob(data), c => c.charCodeAt(0));
-      const blob = new Blob([binary], { type: filetype });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      document.getElementById('recvInfo').textContent = "Empfang abgeschlossen! Datei heruntergeladen.";
-    }
-
-    updateBufferSizeLabel();
+updateBufferSizeLabel();
   </script>
 </body>
 </html>
